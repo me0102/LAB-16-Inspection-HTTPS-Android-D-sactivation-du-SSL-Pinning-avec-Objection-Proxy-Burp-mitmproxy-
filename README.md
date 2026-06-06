@@ -1,291 +1,435 @@
-# LAB-16-Inspection-HTTPS-Android-D-sactivation-du-SSL-Pinning-avec-Objection-Proxy-Burp-mitmproxy-
-We need to provide a version ready to copy-paste to GitHub. The user wants the reformulated README.md content, 100% in French (but can be bilingual? The original was French with some English. The instruction: "reformule ce readme 100% en l'ameliorant et change tout pour eviter le plagiat" and then "donne moi une version prete à copier coller sur github". So output the full README.md content in a code block, ready to copy. Ensure it's well-structured, improved, and original phrasing to avoid plagiarism. Also maintain markdown formatting.
+# LAB 16 — Analyse et Interception du Trafic HTTPS sur Android
 
-Voici le contenu du fichier README.md entièrement reformulé, amélioré et prêt à être copié-collé sur GitHub :
-
-markdown
-# LAB 16 — Neutralisation du SSL Pinning sur Android  
-## Avec Frida, Objection et un proxy intercepteur (Burp Suite / mitmproxy)
+## Contournement Dynamique du SSL Pinning à l'aide de Frida, Objection et Burp Suite
 
 ---
 
-## 📑 Sommaire
+# Résumé
 
-1. [Objectifs pédagogiques](#objectifs)
-2. [Environnement technique](#environnement)
-3. [Architecture de la solution](#architecture)
-4. [Procédure pas à pas](#procedure)
-5. [Captures d’écran](#captures)
-6. [Commandes utiles](#commandes)
-7. [Résolution des problèmes](#depannage)
-8. [Bilan et enseignements](#bilan)
+Les applications mobiles modernes utilisent fréquemment le mécanisme de SSL Pinning afin de renforcer la sécurité des communications réseau et d'empêcher les attaques de type Man-in-the-Middle (MITM). Bien que cette protection améliore la confidentialité des échanges, elle représente également un obstacle lors des audits de sécurité et des tests d'intrusion.
+
+Ce laboratoire présente une méthodologie permettant d'analyser le trafic HTTPS d'une application Android protégée par SSL Pinning sans modifier son code source ni son fichier APK. L'approche repose sur l'utilisation conjointe de Frida, Objection et Burp Suite afin de neutraliser dynamiquement les mécanismes de validation des certificats et d'observer les communications réseau en temps réel.
+
+L'expérimentation a été réalisée sur l'application pédagogique OWASP MSTG UnCrackable Level 1 exécutée dans un environnement Android émulé.
 
 ---
 
-## 🎯 Objectifs pédagogiques <a name="objectifs"></a>
+# Table des matières
 
-- Comprendre le mécanisme de **certificate pinning** (ou SSL Pinning) sous Android et pourquoi il bloque l’interception du trafic HTTPS.
-- Configurer un **proxy d’interception** (Burp Suite) sur un émulateur Android.
-- Utiliser **Frida** et **Objection** pour contourner dynamiquement le SSL Pinning **sans recompiler ni modifier l’APK**.
-- Visualiser en temps réel le flux HTTPS d’une application Android dans Burp Suite.
-- Application d’étude : **OWASP MSTG UnCrackable Level 1** (`owasp.mstg.uncrackable1`).
-
----
-
-## 🛠️ Environnement technique <a name="environnement"></a>
-
-### Machine hôte (Windows)
-
-| Composant | Version |
-|-----------|---------|
-| Système d’exploitation | Windows 10.0.19045 |
-| Python | 3.13.5 / 3.11 (pip) |
-| ADB (Android Debug Bridge) | 1.0.41 — build 37.0.0-14910828 |
-| Frida (client) | 17.9.1 |
-| Objection | 1.12.5 |
-| Burp Suite | Community / Professional |
-
-### Émulateur Android
-
-| Propriété | Valeur |
-|-----------|--------|
-| Identifiant ADB | `emulator-5554` |
-| Version Android | 8.1.0 (Oreo) |
-| Type | AVD (Android Virtual Device) |
-| frida-server | 17.9.1 (version identique au client) |
-
-### Application cible
-
-| Champ | Information |
-|-------|-------------|
-| Nom | OWASP MSTG UnCrackable Level 1 |
-| Package | `owasp.mstg.uncrackable1` |
-| Source officielle | [OWASP MASTG Crackmes](https://github.com/OWASP/owasp-mastg/tree/master/Crackmes/Android/Level_01) |
+1. Introduction
+2. Objectifs du laboratoire
+3. Environnement expérimental
+4. Architecture de la solution
+5. Méthodologie
+6. Déploiement et configuration
+7. Validation des résultats
+8. Commandes utiles
+9. Analyse des résultats
+10. Conclusion
+11. Références
 
 ---
 
-## 🏗️ Architecture de la solution <a name="architecture"></a>
-┌─────────────────────────────────────────────────────────────┐
-│ HÔTE WINDOWS │
-│ │
-│ ┌─────────────┐ ┌──────────────┐ ┌───────────────┐ │
-│ │ Burp Suite │ │ Objection │ │ ADB │ │
-│ │ :8080 │ │ v1.12.5 │ │ v1.0.41 │ │
-│ └──────┬──────┘ └──────┬───────┘ └───────┬───────┘ │
-│ │ │ │ │
-└─────────┼──────────────────┼────────────────────┼───────────┘
-│ Proxy HTTP/HTTPS │ Frida RPC │ USB/TCP
-│ │ │
-┌─────────┼──────────────────┼────────────────────┼───────────┐
-│ │ ÉMULATEUR ANDROID (emulator-5554) │ │
-│ │ │ │ │
-│ ┌──────▼──────────────────▼──────────────┐ │ │
-│ │ owasp.mstg.uncrackable1 │ │ │
-│ │ (SSL Pinning neutralisé dynamiquement)│ │ │
-│ └─────────────────────────────────────────┘ │ │
-│ │ │
-│ ┌───────────────────────────────────────────┐ │ │
-│ │ frida-server 17.9.1 │◄─┘ │
-│ │ /data/local/tmp/frida-server │ │
-│ └───────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+# 1. Introduction
 
-text
+La majorité des applications Android s'appuie aujourd'hui sur le protocole HTTPS afin de garantir la confidentialité et l'intégrité des données échangées avec les serveurs distants.
 
-**Cheminement des paquets interceptés :**  
-App Android ──HTTPS──► frida-server (bypass SSL) ──HTTP──► Burp Suite :8080 ──► Internet
+Afin de renforcer davantage cette sécurité, certaines applications implémentent le SSL Pinning, une technique qui consiste à associer explicitement un certificat ou une clé publique à l'application. Cette vérification supplémentaire empêche l'utilisation de certificats intermédiaires non autorisés, même lorsqu'ils sont installés sur l'appareil.
 
-text
+Dans le cadre d'un audit de sécurité mobile, il est souvent nécessaire d'observer le trafic réseau généré par une application. Le SSL Pinning constitue alors un mécanisme de protection qu'il convient de contourner temporairement afin d'effectuer des analyses dynamiques.
 
 ---
 
-## 📝 Procédure pas à pas <a name="procedure"></a>
+# 2. Objectifs du laboratoire
 
-### 1. Vérification des prérequis
+Les objectifs poursuivis au cours de ce laboratoire sont les suivants :
+
+* Comprendre le principe de fonctionnement du SSL Pinning.
+* Mettre en place un environnement de test Android dédié à l'analyse réseau.
+* Configurer un proxy d'interception HTTPS.
+* Installer et utiliser Frida pour l'instrumentation dynamique.
+* Exploiter Objection pour désactiver le SSL Pinning à l'exécution.
+* Intercepter et analyser le trafic HTTPS généré par une application Android.
+* Vérifier l'efficacité des hooks appliqués par Frida.
+
+---
+
+# 3. Environnement expérimental
+
+## 3.1 Poste d'analyse
+
+| Composant                  | Version           |
+| -------------------------- | ----------------- |
+| Système d'exploitation     | Windows 10 Pro    |
+| Python                     | 3.13.5            |
+| Pip                        | 25.3              |
+| Android Debug Bridge (ADB) | 37.0.0            |
+| Frida                      | 17.9.1            |
+| Objection                  | 1.12.5            |
+| Burp Suite                 | Community Edition |
+
+## 3.2 Plateforme Android
+
+| Élément         | Valeur                 |
+| --------------- | ---------------------- |
+| Type            | Android Virtual Device |
+| Version Android | 8.1.0 (Oreo)           |
+| Identifiant ADB | emulator-5554          |
+| frida-server    | 17.9.1                 |
+
+## 3.3 Application cible
+
+| Paramètre | Valeur                                       |
+| --------- | -------------------------------------------- |
+| Nom       | OWASP MSTG UnCrackable Level 1               |
+| Package   | owasp.mstg.uncrackable1                      |
+| Catégorie | Application de démonstration sécurité mobile |
+
+---
+
+# 4. Architecture de la solution
+
+L'environnement de test repose sur trois composants principaux :
+
+* La machine d'analyse exécutant Burp Suite, Frida et Objection.
+* L'émulateur Android contenant l'application cible.
+* Le canal ADB permettant la communication et l'instrumentation dynamique.
+
+## Schéma logique
+
+```text
++------------------------------------------------------+
+|                 Poste d'analyse                      |
+|                                                      |
+|  Burp Suite    Objection    Frida    ADB             |
++----------------------+-------------------------------+
+                       |
+                       |
+                       v
++------------------------------------------------------+
+|                Émulateur Android                     |
+|                                                      |
+|  OWASP UnCrackable Level 1                           |
+|  Frida Server                                        |
++------------------------------------------------------+
+```
+
+## Flux réseau
+
+```text
+Application Android
+        │
+        ▼
+Hooks Frida / Objection
+        │
+        ▼
+Burp Suite (Proxy HTTPS)
+        │
+        ▼
+Serveur distant
+```
+
+---
+
+# 5. Méthodologie
+
+L'approche adoptée repose sur l'instrumentation dynamique de l'application cible.
+
+Contrairement à une modification statique de l'APK, cette méthode injecte du code directement dans le processus en mémoire grâce à Frida.
+
+Les principales étapes sont :
+
+1. Préparer l'environnement Android.
+2. Déployer Frida Server.
+3. Configurer le proxy Burp Suite.
+4. Connecter Objection à l'application.
+5. Désactiver dynamiquement le SSL Pinning.
+6. Observer le trafic HTTPS intercepté.
+
+---
+
+# 6. Déploiement et configuration
+
+## Étape 1 : Vérification des outils
 
 ```powershell
-python --version        # Python 3.13.5
-pip --version           # pip 25.3
-adb version             # Android Debug Bridge 1.0.41
-frida --version         # 17.9.1
-objection version       # 1.12.5
-2. Démarrage de l’émulateur et test ADB
-powershell
+python --version
+pip --version
+adb version
+frida --version
+objection version
+```
+
+---
+
+## Étape 2 : Vérification de l'émulateur Android
+
+```powershell
 adb devices
+```
+
 Résultat attendu :
 
-text
+```text
 List of devices attached
-emulator-5554   device
-3. Installation et lancement de frida-server sur l’émulateur
-powershell
+emulator-5554    device
+```
+
+---
+
+## Étape 3 : Installation et démarrage de Frida Server
+
+Copie du serveur Frida vers l'émulateur :
+
+```powershell
 adb push frida-server /data/local/tmp/
 adb shell "chmod 755 /data/local/tmp/frida-server"
+```
+
+Démarrage du service :
+
+```powershell
 adb shell "/data/local/tmp/frida-server &"
+```
+
+Vérification :
+
+```powershell
 adb shell "ps -A | grep frida"
-Sortie typique :
+```
 
-text
-root  5846  5452  921280  89640  poll_schedule_timeout  ...  S  frida-server
-4. Test de Frida : lister les applications
-powershell
+---
+
+## Étape 4 : Validation de la communication Frida
+
+Lister les appareils détectés :
+
+```powershell
 frida-ls-devices
+```
+
+Lister les applications installées :
+
+```powershell
 frida-ps -Uai
-Vérifier que owasp.mstg.uncrackable1 apparaît dans la liste.
+```
 
-5. Configuration du proxy Burp Suite
-Burp Suite → Proxy → Proxy Settings → ajouter un listener sur 0.0.0.0:8080
+Vérifier la présence du package :
 
-Sur l’émulateur : Paramètres → Wi-Fi → Proxy manuel
+```text
+owasp.mstg.uncrackable1
+```
 
-Hôte : 10.0.2.2 (IP de la machine hôte vue par l’émulateur)
+---
 
+## Étape 5 : Configuration de Burp Suite
+
+Configurer un écouteur proxy :
+
+```text
+Adresse : 0.0.0.0
 Port : 8080
+```
 
-Installer le certificat Burp :
+Configurer ensuite le proxy sur l'émulateur :
 
-Depuis le navigateur de l’émulateur, accéder à http://burp et télécharger le certificat
+```text
+Host : 10.0.2.2
+Port : 8080
+```
 
-Ou via ADB :
+Appliquer également la configuration via ADB :
+
+```powershell
 adb shell "settings put global http_proxy 10.0.2.2:8080"
+```
 
-6. Mise à jour d’Objection (indispensable pour Frida 17.x)
-⚠️ Avec Frida 17.x, Objection 1.12.5 ou supérieur est obligatoire.
+Installer ensuite le certificat Burp sur l'émulateur afin d'autoriser l'inspection HTTPS.
 
-powershell
+---
+
+## Étape 6 : Mise à jour d'Objection
+
+```powershell
 pip install objection --upgrade
-objection version   # Doit afficher 1.12.5 ou plus
-7. Lancement d’Objection avec désactivation automatique du SSL Pinning
-powershell
+```
+
+Vérification :
+
+```powershell
+objection version
+```
+
+Version recommandée :
+
+```text
+1.12.5
+```
+
+---
+
+## Étape 7 : Désactivation du SSL Pinning
+
+Lancer l'application avec Objection :
+
+```powershell
 objection -n owasp.mstg.uncrackable1 start --startup-command "android sslpinning disable"
-Retour attendu :
+```
 
-text
-Running a startup command... android sslpinning disable
-(agent) Custom TrustManager ready, overriding SSLContext.init()
-(agent) Found com.android.org.conscrypt.TrustManagerImpl, overriding TrustManagerImpl.verifyChain()
-(agent) Found com.android.org.conscrypt.TrustManagerImpl, overriding TrustManagerImpl.checkTrustedRecursive()
-(agent) Registering job 32535. Name: android-sslpinning-disable
+Cette commande installe automatiquement plusieurs hooks permettant de neutraliser les mécanismes de validation TLS.
 
-owasp.mstg.uncrackable1 (run) on (Android: 8.1.0) [usb] #
-8. Commandes d’exploration dans l’invite Objection
-Une fois dans l’invite owasp.mstg.uncrackable1 (run) on (Android: 8.1.0) [usb] # :
+---
 
-bash
-# Neutraliser la détection de root
+## Étape 8 : Exploration de l'application
+
+Une fois connecté :
+
+```bash
 android root disable
+```
 
-# Lister les activités
+Lister les activités :
+
+```bash
 android hooking list activities
+```
 
-# Lister toutes les classes de l’application
+Lister les classes :
+
+```bash
 android hooking list classes
+```
 
-# Afficher les jobs actifs (le bypass SSL doit apparaître)
-jobs list
+Lister les services :
 
-# Lister les services
+```bash
 android hooking list services
-📸 Captures d’écran <a name="captures"></a>
-✅ Capture 1 – Versions de l’environnement
-<img width="1156" height="385" alt="image" src="https://github.com/user-attachments/assets/46fe1f7c-4982-453f-a74f-865487a1660f" />
-text
-Python 3.13.5 | pip 25.3 | ADB 1.0.41 (Windows 10.0.19045)
-✅ Capture 2 – Versions Frida & Objection
-<img width="1125" height="490" alt="image" src="https://github.com/user-attachments/assets/f0daa91e-af91-4207-a33c-14fd265d6392" />
-text
-Frida : 17.9.1 → Objection : 1.12.5 (après mise à jour)
-✅ Capture 3 – Périphériques ADB et processus Frida
-text
-emulator-5554   device (Android 8.1.0)
-frida-ps -Uai → affiche correctement owasp.mstg.uncrackable1
-<img width="972" height="813" alt="image" src="https://github.com/user-attachments/assets/2056f22c-8284-475c-8db6-9f58068af1be" />
-✅ Capture 4 – Trafic intercepté dans Burp Suite
-text
-Historique HTTP → requêtes Android visibles sur le port 8080
-Hôtes : connectivitycheck.gstatic.com, play.googleapis.com, www.google.com
-Le proxy fonctionne et le trafic est bien capturé
-<img width="1597" height="397" alt="image" src="https://github.com/user-attachments/assets/3273d186-3b0d-4c1d-885b-ab7d869ccf33" />
-✅ Capture 5 – Objection connecté + SSL Pinning désactivé (au lancement)
-text
-objection -n owasp.mstg.uncrackable1 start --startup-command "android sslpinning disable"
+```
 
-(agent) Custom TrustManager ready, overriding SSLContext.init()         ✅
-(agent) TrustManagerImpl.verifyChain() → overridden                     ✅
-(agent) TrustManagerImpl.checkTrustedRecursive() → overridden           ✅
-(agent) Job 32535 enregistré : android-sslpinning-disable               ✅
-Invite : owasp.mstg.uncrackable1 (run) on (Android: 8.1.0) [usb] #    ✅
-<img width="1459" height="541" alt="image" src="https://github.com/user-attachments/assets/1f5d8e1d-feb2-4548-83c3-dfb6867f0f0a" />
-✅ Capture 6 – Désactivation manuelle du SSL Pinning depuis l’invite
-text
-owasp.mstg.uncrackable1 (run) on (Android: 8.1.0) [usb] # android sslpinning disable
+Afficher les hooks actifs :
 
-(agent) Custom TrustManager ready, overriding SSLContext.init()         ✅
-(agent) TrustManagerImpl.verifyChain() → overridden                     ✅
-(agent) TrustManagerImpl.checkTrustedRecursive() → overridden           ✅
-(agent) Job 800451 enregistré : android-sslpinning-disable              ✅
-<img width="1414" height="631" alt="image" src="https://github.com/user-attachments/assets/ea74e303-696d-454f-a34d-b4777b18868b" />
-📚 Commandes utiles <a name="commandes"></a>
-ADB
-powershell
-adb devices                                          # Lister les périphériques
-adb shell "ps -A | grep frida"                       # Vérifier frida-server
-adb shell "/data/local/tmp/frida-server &"           # Lancer frida-server
-adb shell pm list packages | findstr uncrackable     # Vérifier l’installation de l’app
-adb shell monkey -p owasp.mstg.uncrackable1 1        # Démarrer l’application
-adb shell "settings put global http_proxy 10.0.2.2:8080"  # Configurer le proxy système
-Frida
-powershell
-frida-ls-devices                        # Lister les périphériques Frida
-frida-ps -U                             # Processus actifs
-frida-ps -Uai                           # Toutes les applications + identifiants
-frida -U -f owasp.mstg.uncrackable1     # Spawner l’app avec Frida
-frida --version                         # Afficher la version
-Objection
-powershell
-# Lancement avec bypass SSL automatique
-objection -n owasp.mstg.uncrackable1 start --startup-command "android sslpinning disable"
+```bash
+jobs list
+```
 
-# Commandes internes à l’invite Objection :
-android sslpinning disable              # Désactiver le pinning SSL
-android root disable                    # Contourner la détection root
-android hooking list activities         # Lister les activités
-android hooking list classes            # Lister les classes
-android hooking list services           # Lister les services
-jobs list                               # Voir les hooks actifs
-🔧 Résolution des problèmes <a name="depannage"></a>
-Message d’erreur	Cause probable	Solution
-Unable to find target application	frida-server non démarré ou app non lancée	Exécuter adb shell "/data/local/tmp/frida-server &" puis ouvrir l’application
-DeprecationWarning: 'gadget' is deprecated	Ancienne syntaxe -g	Remplacer par -n
-DeprecationWarning: 'explore' is deprecated	Commande obsolète	Remplacer par start
-Incompatibilité Frida/Objection	Versions incohérentes	Mettre à jour Objection : pip install objection --upgrade
-Architecture incorrecte de frida-server	Binaire Frida inadapté au CPU de l’émulateur	Vérifier avec adb shell getprop ro.product.cpu.abi puis télécharger le bon binaire
-🏁 Bilan et enseignements <a name="bilan"></a>
-Ce laboratoire démontre une approche non intrusive pour neutraliser le SSL Pinning sous Android.
+---
 
-Ce qui a été accompli
-Aucune modification de l’APK : tout le contournement s’effectue à l’exécution par injection via Frida.
+# 7. Validation des résultats
 
-SSL Pinning désactivé sur trois niveaux : SSLContext, TrustManagerImpl.verifyChain() et TrustManagerImpl.checkTrustedRecursive().
+Les résultats obtenus démontrent que :
 
-Interception HTTPS fonctionnelle dans Burp Suite sur le port 8080.
+* Frida Server fonctionne correctement sur l'émulateur.
+* Objection établit une connexion avec l'application cible.
+* Les hooks SSL sont injectés avec succès.
+* Le trafic HTTPS devient visible dans Burp Suite.
+* Les requêtes réseau peuvent être observées et analysées.
 
-Environnement opérationnel complet : Frida 17.9.1 + Objection 1.12.5 + Android 8.1.0.
+Les indicateurs suivants confirment le succès de l'opération :
 
-Points clés à retenir
-La version de frida-server doit être rigoureusement identique à celle du client frida sur le poste de travail.
+```text
+Custom TrustManager ready
+SSLContext.init() overridden
+verifyChain() overridden
+checkTrustedRecursive() overridden
+```
 
-Objection 1.12.5 est nécessaire pour une compatibilité parfaite avec Frida 17.x.
+La présence de ces messages indique que les mécanismes de vérification des certificats ont été neutralisés.
 
-L’application doit être spawnée (pas simplement installée) pour que l’injection réussisse.
+---
 
-L’option --startup-command permet d’activer le hook SSL dès la première requête réseau.
+# 8. Commandes utiles
 
-Références
-OWASP MASTG — Testing Network Communication
+## Android Debug Bridge
 
-Objection sur GitHub
+```powershell
+adb devices
+adb shell
+adb push
+adb pull
+adb install
+adb uninstall
+adb logcat
+```
 
-Documentation Frida
+## Frida
 
-PortSwigger — Tests mobiles avec Burp Suite
+```powershell
+frida --version
+frida-ls-devices
+frida-ps -U
+frida-ps -Uai
+frida -U -f owasp.mstg.uncrackable1
+```
+
+## Objection
+
+```powershell
+android sslpinning disable
+android root disable
+android hooking list activities
+android hooking list classes
+android hooking list services
+jobs list
+```
+
+---
+
+# 9. Analyse des résultats
+
+L'utilisation combinée de Frida et Objection permet de contourner efficacement les protections SSL Pinning sans altérer l'application.
+
+Cette approche présente plusieurs avantages :
+
+* Aucune modification de l'APK.
+* Aucun processus de recompilation.
+* Instrumentation en temps réel.
+* Réversibilité immédiate.
+* Compatibilité avec de nombreuses applications Android.
+
+Toutefois, certaines applications implémentent des mécanismes de protection avancés pouvant nécessiter des scripts Frida personnalisés ou des techniques complémentaires.
+
+---
+
+# 10. Conclusion
+
+Ce laboratoire a permis de démontrer la faisabilité de l'interception du trafic HTTPS d'une application Android protégée par SSL Pinning grâce à une instrumentation dynamique.
+
+L'association de Frida, Objection et Burp Suite constitue une solution particulièrement efficace pour les audits de sécurité mobile et les analyses comportementales.
+
+Les principaux résultats obtenus sont :
+
+* Mise en place complète de l'environnement d'analyse.
+* Déploiement réussi de Frida Server.
+* Désactivation dynamique du SSL Pinning.
+* Interception fonctionnelle du trafic HTTPS.
+* Validation du fonctionnement des hooks de sécurité.
+
+Cette méthodologie représente aujourd'hui l'une des approches les plus utilisées lors des évaluations de sécurité des applications Android.
+
+---
+
+# 11. Références
+
+OWASP Mobile Application Security Testing Guide (MASTG)
+
+https://mas.owasp.org/
+
+Frida Documentation
+
+https://frida.re/docs/
+
+Objection Framework
+
+https://github.com/sensepost/objection
+
+PortSwigger Burp Suite Documentation
+
+https://portswigger.net/burp/documentation
+
+Android Developers Documentation
+
+https://developer.android.com/
+
+Android Debug Bridge (ADB)
+
+https://developer.android.com/tools/adb
